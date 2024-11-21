@@ -45,7 +45,7 @@ def gray_world(img):
 
     return img_corrected
 
-def white_balanced_image(img, alpha=1, compensate_blue_channel=False):
+def white_balanced_image(img, alpha=2.3, compensate_blue_channel=False):
     """
     Apply white balancing to red channel of BGR underwater images
     
@@ -60,12 +60,11 @@ def white_balanced_image(img, alpha=1, compensate_blue_channel=False):
     mean_red = np.mean(img[:, :, 2])
     mean_green = np.mean(img[:, :, 1])
     mean_blue = np.mean(img[:, :, 0]) if compensate_blue_channel else None
-    print(mean_blue)
     for i in range(img.shape[0]):
         for j in range(img.shape[1]):
             img[i][j][2] = unnormalize(normalize(img[i][j][2]) + alpha * (normalize(mean_green) - normalize(mean_red)) * (1 - normalize(img[i][j][2])) * normalize(img[i][j][1]))
             if compensate_blue_channel:
-               img[i][j][0] = unnormalize(normalize(img[i][j][0]) + alpha * (normalize(mean_green) - normalize(mean_blue)) * (1 - normalize(img[i][j][0])) * normalize(img[i][j][1]))
+                img[i][j][0] = unnormalize(normalize(img[i][j][0]) + alpha * (normalize(mean_green) - normalize(mean_blue)) * (1 - normalize(img[i][j][0])) * normalize(img[i][j][1]))
 
     img = gray_world(img)#wb.balanceWhite(img)
     return img
@@ -81,7 +80,7 @@ def normalized_unsharp_masking(img, kernel_size=5):
     mask = cv2.merge(sharpened_channels)
     return (img + mask) / 2
 
-def gamma_correction(img, gamma_factor=1.25):
+def gamma_correction(img, gamma_factor=1.5):
     return (img/255)**gamma_factor * 255 
 
 def underwater_image_enhancement(img, title):
@@ -95,6 +94,8 @@ def underwater_image_enhancement(img, title):
 
 def main():
     img = read_image('input_image1.png')
+    # white_balanced = white_balanced_image(img.copy(), alpha = 2.3, compensate_blue_channel=True)
+    # write_image("qqq.png", white_balanced)
     underwater_image_enhancement(img, "actual_function")
     
 if __name__ == '__main__':
