@@ -1,4 +1,3 @@
-#Load libraries
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,64 +10,44 @@ def write_image(img_path, img):
     cv2.imwrite(img_path, img)
 
 def normalize(pixel):
-    return np.float32(pixel) / 255
+    return np.float32(pixel) / np.max([np.max(pixel), 255]) if np.max(pixel) > 0 else np.float32(pixel)
 
 def unnormalize(pixel):
-    return np.uint8(pixel * 255)
+    return np.uint8(pixel * 255) if np.max(pixel) <= 1 else np.uint8(pixel/np.max(pixel) * 255)
 
 def convert(image):
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     
 def gray_world(img):
-    # Convert image to float32 for precision during calculations
     img_float = np.float32(img)
-
-    # Calculate the average of each channel
-    avg_b = np.mean(img_float[:, :, 0])  # Blue channel average
-    avg_g = np.mean(img_float[:, :, 1])  # Green channel average
-    avg_r = np.mean(img_float[:, :, 2])  # Red channel average
-
-    # Calculate the overall average (mean of the three channels)
+    avg_b = np.mean(img_float[:, :, 0])
+    avg_g = np.mean(img_float[:, :, 1])
+    avg_r = np.mean(img_float[:, :, 2])
     avg_all = (avg_b + avg_g + avg_r) / 3.0
-
-    # Calculate scale factors for each channel
     scale_b = avg_all / avg_b
     scale_g = avg_all / avg_g
     scale_r = avg_all / avg_r
-
-    # Apply the scaling factors to each channel
-    img_float[:, :, 0] *= scale_b  # Scale Blue channel
-    img_float[:, :, 1] *= scale_g  # Scale Green channel
-    img_float[:, :, 2] *= scale_r  # Scale Red channel
-
-    # Clip values to stay within valid range (0 to 255)
+    img_float[:, :, 0] *= scale_b
+    img_float[:, :, 1] *= scale_g 
+    img_float[:, :, 2] *= scale_r 
     img_float = np.clip(img_float, 0, 255)
-
-    # Convert the image back to uint8
     img_corrected = np.uint8(img_float)
 
     return img_corrected
     
 def white_balanced_image(img, alpha=1, compensate_blue_channel=False):
-    """
-    Apply white balancing to red channel of BGR underwater images
-    
-    Args:
-        img (np.array): the image to apply white balancing to
-        alpha (int) (optional): The weight to apply to color correction (default = 1)
-        compensate_blue_channel (bool) (optional): Whether to also apply blue channel correction (need for cases of turbid waters, plankton) (default = False)
-    """
     if len(img.shape) < 3:
         raise ValueError("Color image expected, received grayscale image")
+    img = normalize(img)
     mean_red = np.mean(img[:, :, 2])
     mean_green = np.mean(img[:, :, 1])
     mean_blue = np.mean(img[:, :, 0]) if compensate_blue_channel else None
     for i in range(img.shape[0]):
         for j in range(img.shape[1]):
-            img[i][j][2] = unnormalize(normalize(img[i][j][2]) + alpha * (normalize(mean_green) - normalize(mean_red)) * (1 - normalize(img[i][j][2])) * normalize(img[i][j][1]))
+            img[i][j][2] = img[i][j][2] + alpha * (mean_green - mean_red) * (1 - img[i][j][2]) * img[i][j][1]
             if compensate_blue_channel:
-                img[i][j][0] = unnormalize(normalize(img[i][j][0]) + alpha * (normalize(mean_green) - normalize(mean_blue)) * (1 - normalize(img[i][j][0])) * normalize(img[i][j][1]))
-    return img
+                img[i][j][0] = img[i][j][0] + alpha * (mean_green - mean_blue) * (1 - img[i][j][0]) * img[i][j][1]
+    return unnormalize(img)
         
 def normalized_unsharp_masking(img, kernel_size=7):
     b, g, r = cv2.split(img)
@@ -77,7 +56,7 @@ def normalized_unsharp_masking(img, kernel_size=7):
         blurred_channel = cv2.GaussianBlur(channel, (kernel_size, kernel_size), 0)
         sharpened_channel = channel - blurred_channel
         contrast_stretched_channel = cv2.normalize(sharpened_channel, None, 0, 255, cv2.NORM_MINMAX)
-        sharpened_channels.append(contrast_stretched_channel)#cv2.addWeighted(channel, 1 + weight, sharpened_img, weight, 0))
+        sharpened_channels.append(contrast_stretched_channel)
     mask = cv2.merge(sharpened_channels)
     return np.uint8((img + mask) / 2)
 
@@ -89,35 +68,23 @@ def laplacian_contrast_weight(img):
     
 def saliency_weight(img):
     lab_image = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
-    
-    # Compute the mean pixel vector (I_mu)
-    mean_pixel = lab_image.mean(axis=(0, 1), keepdims=True)  # Broadcast to full image size
-    
-    # Apply Gaussian blur to the original image (I_ωhc)
+    mean_pixel = lab_image.mean(axis=(0, 1), keepdims=True)
     blurred_image = cv2.GaussianBlur(lab_image, (3, 3), 0)
-    
-    # Compute the L2 norm (Euclidean distance) between I_mu and I_ωhc
-    saliency_weight = np.linalg.norm(mean_pixel - blurred_image, axis=2)  # Across the Lab channels
+    saliency_weight = np.linalg.norm(mean_pixel - blurred_image, axis=2)
     return saliency_weight
 
-def saturation_weight(grayscale_img, color_img):
-    grayscale_img = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-    #return np.linalg.norm(color_img - grayscale_img[..., np.newaxis], axis=2) / np.sqrt(3)
-    return np.sqrt((color_img[:,:,0] - grayscale_img)**2 + (color_img[:,:,1] - grayscale_img)**2 + (color_img[:,:,2] - grayscale_img)**2) / np.sqrt(3)
-
 def saturation_weight(img):
-    b,g,r=cv2.split(img)
-    lum=cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-    w=np.sqrt((1/3)*((r-lum)**2+(g-lum)**2+(b-lum)**2))
-    return w
+    grayscale = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blue, green, red = cv2.split(img)
+    return np.sqrt((1/3)*((blue - grayscale)**2 + (green - grayscale)**2 + (red - grayscale)**2))
     
 def combine_weights(img1mask1, img1mask2, img1mask3, img2mask1, img2mask2, img2mask3):
     img1_weight = img1mask1 + img1mask2 + img1mask3
     img2_weight = img2mask1 + img2mask2 + img2mask3
-    img1_norm = (img1_weight + 0.1)/(img1_weight + img2_weight)
-    img2_norm = (img2_weight + 0.2)/(img1_weight + img2_weight)
-    img1_norm=np.repeat(img1_norm[:, :, np.newaxis], 3, axis=-1)
-    img2_norm=np.repeat(img2_norm[:, :, np.newaxis], 3, axis=-1)
+    img1_norm = (img1_weight)/(img1_weight + img2_weight)
+    img2_norm = (img2_weight)/(img1_weight + img2_weight)
+    img1_norm = np.repeat(img1_norm[:, :, np.newaxis], 3, axis=-1)
+    img2_norm = np.repeat(img2_norm[:, :, np.newaxis], 3, axis=-1)
     return img1_norm, img2_norm
 
 def gaussian_pyramid(image, levels):
@@ -147,7 +114,7 @@ def reconstruct_from_laplacian(pyramid):
     output = pyramid[0]
     output=np.clip(output, 0, 255).astype(np.uint8)
     return output
-
+    
 def fusion(level, img_gamma_corrected, img_sharpened, combined_weight_gamma_corrected, combined_weight_sharpened):
     input1_laplacian_pyramid=laplacian_pyramid(img_gamma_corrected,level)
     input2_laplacian_pyramid=laplacian_pyramid(img_sharpened,level)
@@ -176,17 +143,11 @@ def underwater_image_enhancement(img, title, compensate_blue_channel, gamma_fact
     img_gamma_corrected = gamma_correction(img_grayworld, gamma_factor=gamma_factor)
     write_image(f"{title}_gamma_corrected.jpg", img_gamma_corrected)
     
-    grayscale_gamma_corrected = cv2.cvtColor(img_gamma_corrected, cv2.COLOR_BGR2GRAY).astype(np.float64)/255
-    # write_image(f"{title}_grayscale_gamma_corrected.jpg", grayscale_gamma_corrected) 
-    
-    grayscale_sharpened = cv2.cvtColor(img_sharpened, cv2.COLOR_BGR2GRAY).astype(np.float64)/255
-    # write_image(f"{title}_grayscale_sharpened.jpg", grayscale_sharpened)
-    
-    laplacian_contrast_weight_gamma_corrected = laplacian_contrast_weight(img_gamma_corrected)#grayscale_gamma_corrected)
-    # write_image(f"{title}_laplacian_contrast_gamma_corrected.jpg", laplacian_contrast_weight_gamma_corrected)
+    laplacian_contrast_weight_gamma_corrected = laplacian_contrast_weight(img_gamma_corrected)
+    write_image(f"{title}_laplacian_contrast_gamma_corrected.jpg", laplacian_contrast_weight_gamma_corrected)
     
     laplacian_contrast_weight_sharpened = laplacian_contrast_weight(img_sharpened)#grayscale_sharpened) 
-    # write_image(f"{title}_laplacian_contrast_sharpened.jpg", laplacian_contrast_weight_sharpened)
+    write_image(f"{title}_laplacian_contrast_sharpened.jpg", laplacian_contrast_weight_sharpened)
 
     saliency_weight_gamma_corrected = saliency_weight(img_gamma_corrected)
     write_image(f"{title}_saliency_weight_gamma_corrected.jpg", saliency_weight_gamma_corrected)  
@@ -194,10 +155,10 @@ def underwater_image_enhancement(img, title, compensate_blue_channel, gamma_fact
     saliency_weight_sharpened = saliency_weight(img_sharpened)  
     write_image(f"{title}_saliency_weight_sharpened.jpg", saliency_weight_sharpened) 
     
-    saturation_weight_gamma_corrected = saturation_weight(img_gamma_corrected)#grayscale_gamma_corrected, img_normalized)
+    saturation_weight_gamma_corrected = saturation_weight(img_gamma_corrected)
     write_image(f"{title}_saturation_weight_gamma_corrected.jpg", unnormalize(saturation_weight_gamma_corrected)) 
 
-    saturation_weight_sharpened = saturation_weight(img_sharpened)#grayscale_sharpened, img_normalized)  
+    saturation_weight_sharpened = saturation_weight(img_sharpened)
     write_image(f"{title}_saturation_weight_sharpened.jpg", unnormalize(saturation_weight_sharpened)) 
 
     combined_weight_gamma_corrected, combined_weight_sharpened = combine_weights(laplacian_contrast_weight_gamma_corrected, saliency_weight_gamma_corrected, saturation_weight_gamma_corrected,
@@ -208,16 +169,45 @@ def underwater_image_enhancement(img, title, compensate_blue_channel, gamma_fact
     result = fusion(laplacian_levels, img_gamma_corrected, img_sharpened, combined_weight_gamma_corrected, combined_weight_sharpened)
 
     cv2.imwrite(f'{title}_result.jpg', result)
+
     return result
 
+def average_cie76(img1, img2):
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2Lab)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2Lab)
+    return np.mean(np.sqrt(np.sum((img1 - img2)**2)))
+
+def canny_edge_detection(img, title):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, threshold1=100, threshold2=200)
+    plt.imshow(edges, cmap='gray')
+    plt.title('Canny Edge Detection')
+    plt.show()
+    cv2.imwrite(f'{title}_canny.jpg', edges)
+    
 def main():
-    img_path = 'output/budda/budda_original.png'
-    img = read_image(img_path)
-    compensate_blue = True
-    gamma_factor = 1.5
-    kernel_size = 7
-    laplacian_levels = 3
-    underwater_image_enhancement(img, re.split('[_.]', img_path)[0], compensate_blue, gamma_factor, kernel_size, laplacian_levels)#img_path.split(['_', '.'])[0])
+    keywords = ['circle', 'two', 'budda']
+    image_paths = [f'output/{keyword}/{keyword}_original.jpg' for keyword in keywords]
+    correct_image_paths = [f'output/{keyword}/{keyword}_correct.jpg' for keyword in keywords]
+    for i, img_path in enumerate(image_paths):
+        if 'budda' in img_path:
+            img_path = img_path.split('.')[0]+'.png'
+        img = read_image(img_path)
+        compensate_blue = True
+        if 'circle' in img_path:
+            gamma_factor = 3
+        else:
+            gamma_factor = 1.5
+        kernel_size = 7
+        laplacian_levels = 3
+        result = underwater_image_enhancement(img, re.split('[_.]', img_path)[0], compensate_blue, gamma_factor, kernel_size, laplacian_levels)#img_path.split(['_', '.'])[0])
+        print(f'{img_path}: Average CIE76/Delta E between original and result: {average_cie76(img, result)}')
+        print(f'{img_path}: Average CIE76/Delta E between correct and result: {average_cie76(read_image(correct_image_paths[i]), result)}')
+        print(f'{img_path}: Percent Improvement: {(average_cie76(img, result) - average_cie76(read_image(correct_image_paths[i]), result))*100/average_cie76(img, result)}%')
+        canny_edge_detection(img, f'{keywords[i]}_original')
+        canny_edge_detection(result, f'{keywords[i]}_result')
     print("Done")
+
+    
 if __name__ == '__main__':
     main()
